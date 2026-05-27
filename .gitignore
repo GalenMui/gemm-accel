@@ -1,0 +1,7 @@
+sim/out/
+vivado_out/
+.Xil/
+*.jou
+*.log
+*.pb
+*.str
