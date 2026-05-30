@@ -1,0 +1,5 @@
+name=edge_tiles_5x5x5
+m=5
+n=5
+k=5
+mac_ops=125

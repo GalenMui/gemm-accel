@@ -17,11 +17,21 @@ module pe #(
     output logic signed [ACC_W-1:0]      acc_out
 );
 
-    logic skip_mac;
+    logic signed [ACC_W-1:0] acc_next;
+    logic                    mac_active;
 
-    always_comb begin
-        skip_mac = ENABLE_ZERO_GATING && ((act_in == '0) || (wgt_in == '0));
-    end
+    mac_unit #(
+        .DATA_W(DATA_W),
+        .ACC_W(ACC_W),
+        .ENABLE_ZERO_GATING(ENABLE_ZERO_GATING)
+    ) u_mac_unit (
+        .in_valid  (in_valid),
+        .act_in    (act_in),
+        .wgt_in    (wgt_in),
+        .acc_in    (acc_out),
+        .acc_next  (acc_next),
+        .mac_active(mac_active)
+    );
 
     always_ff @(posedge clk) begin
         if (rst) begin
@@ -36,8 +46,8 @@ module pe #(
 
             if (clear_acc) begin
                 acc_out <= '0;
-            end else if (in_valid && !skip_mac) begin
-                acc_out <= acc_out + ($signed(act_in) * $signed(wgt_in));
+            end else if (in_valid) begin
+                acc_out <= acc_next;
             end
         end
     end

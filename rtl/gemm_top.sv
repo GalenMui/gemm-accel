@@ -1,9 +1,9 @@
 `timescale 1ns / 1ps
 
 module gemm_top #(
-    parameter int ARRAY_M = 8,
-    parameter int ARRAY_N = 8,
-    parameter int TILE_K = 8,
+    parameter int ARRAY_M = 2,
+    parameter int ARRAY_N = 2,
+    parameter int TILE_K = 2,
     parameter int DATA_W = 8,
     parameter int ACC_W = 32,
     parameter int DIM_W = 16,
@@ -43,11 +43,15 @@ module gemm_top #(
     localparam int LOAD_A_COUNT = ARRAY_M * TILE_K;
     localparam int LOAD_B_COUNT = TILE_K * ARRAY_N;
     localparam int LOAD_CYCLES  = (LOAD_A_COUNT > LOAD_B_COUNT) ? LOAD_A_COUNT : LOAD_B_COUNT;
-    localparam int LOAD_W       = $clog2(LOAD_CYCLES + 1);
+    localparam int LOAD_W       = (LOAD_CYCLES > 0) ? $clog2(LOAD_CYCLES + 1) : 1;
     localparam int ROW_IDX_W    = (ARRAY_M > 1) ? $clog2(ARRAY_M) : 1;
     localparam int COL_IDX_W    = (ARRAY_N > 1) ? $clog2(ARRAY_N) : 1;
     localparam int K_IDX_W      = (TILE_K > 1) ? $clog2(TILE_K) : 1;
-    localparam int STORE_W      = $clog2(ARRAY_M * ARRAY_N);
+    localparam int STORE_COUNT  = ARRAY_M * ARRAY_N;
+    localparam int STORE_W      = (STORE_COUNT > 1) ? $clog2(STORE_COUNT) : 1;
+    localparam int A_TILE_ADDR_W = (LOAD_A_COUNT > 1) ? $clog2(LOAD_A_COUNT) : 1;
+    localparam int B_TILE_ADDR_W = (LOAD_B_COUNT > 1) ? $clog2(LOAD_B_COUNT) : 1;
+    localparam int C_TILE_ADDR_W = (STORE_COUNT > 1) ? $clog2(STORE_COUNT) : 1;
 
     logic                           clear_acc;
     logic                           load_phase;
@@ -56,6 +60,8 @@ module gemm_top #(
     logic [LOAD_W-1:0]              load_index;
     logic                           compute_phase;
     logic [K_IDX_W-1:0]             compute_k_idx;
+    logic                           capture_phase;
+    logic [STORE_W-1:0]             capture_index;
     logic                           store_phase;
     logic [STORE_W-1:0]             store_index;
     logic [DIM_W-1:0]               tile_row_base;
@@ -77,14 +83,21 @@ module gemm_top #(
     logic [ACC_W-1:0]               accel_c_wdata;
     logic [ACC_W-1:0]               accel_c_rdata;
 
-    logic signed [DATA_W-1:0]       a_tile_buf [0:ARRAY_M-1][0:TILE_K-1];
-    logic signed [DATA_W-1:0]       b_tile_buf [0:TILE_K-1][0:ARRAY_N-1];
     logic signed [DATA_W-1:0]       act_stream [0:ARRAY_M-1];
     logic signed [DATA_W-1:0]       wgt_stream [0:ARRAY_N-1];
     logic signed [ACC_W-1:0]        result_matrix [0:ARRAY_M-1][0:ARRAY_N-1];
+    logic [ARRAY_M*TILE_K*DATA_W-1:0] a_tile_flat;
+    logic [TILE_K*ARRAY_N*DATA_W-1:0] b_tile_flat;
+    logic [ARRAY_M*ARRAY_N*ACC_W-1:0] c_tile_flat;
     logic [ARRAY_M*DATA_W-1:0]      act_stream_flat;
     logic [ARRAY_N*DATA_W-1:0]      wgt_stream_flat;
     logic [ARRAY_M*ARRAY_N*ACC_W-1:0] result_matrix_flat;
+
+    logic [A_TILE_ADDR_W-1:0]       a_tile_write_addr;
+    logic [B_TILE_ADDR_W-1:0]       b_tile_write_addr;
+    logic                           c_tile_write_en;
+    logic [C_TILE_ADDR_W-1:0]       c_tile_write_addr;
+    logic [ACC_W-1:0]               c_tile_write_data;
 
     logic                           a_commit_valid_d;
     logic                           b_commit_valid_d;
@@ -102,10 +115,11 @@ module gemm_top #(
 
     logic [ROW_IDX_W-1:0]           store_row_idx;
     logic [COL_IDX_W-1:0]           store_col_idx;
+    logic [ROW_IDX_W-1:0]           capture_row_idx;
+    logic [COL_IDX_W-1:0]           capture_col_idx;
 
     integer row;
     integer col;
-    integer kval;
 
     controller #(
         .ARRAY_M(ARRAY_M),
@@ -128,6 +142,8 @@ module gemm_top #(
         .load_index   (load_index),
         .compute_phase(compute_phase),
         .compute_k_idx(compute_k_idx),
+        .capture_phase(capture_phase),
+        .capture_index(capture_index),
         .store_phase  (store_phase),
         .store_index  (store_index),
         .tile_row_base(tile_row_base),
@@ -195,6 +211,48 @@ module gemm_top #(
         .b_rdata(accel_c_rdata)
     );
 
+    tile_buffer #(
+        .DATA_W(DATA_W),
+        .ROWS  (ARRAY_M),
+        .COLS  (TILE_K)
+    ) u_a_tile_buffer (
+        .clk       (clk),
+        .rst       (rst),
+        .clear     (load_buf_clear),
+        .write_en  (a_commit_valid_d),
+        .write_addr(a_tile_write_addr),
+        .write_data(accel_a_rdata),
+        .data_flat (a_tile_flat)
+    );
+
+    tile_buffer #(
+        .DATA_W(DATA_W),
+        .ROWS  (TILE_K),
+        .COLS  (ARRAY_N)
+    ) u_b_tile_buffer (
+        .clk       (clk),
+        .rst       (rst),
+        .clear     (load_buf_clear),
+        .write_en  (b_commit_valid_d),
+        .write_addr(b_tile_write_addr),
+        .write_data(accel_b_rdata),
+        .data_flat (b_tile_flat)
+    );
+
+    tile_buffer #(
+        .DATA_W(ACC_W),
+        .ROWS  (ARRAY_M),
+        .COLS  (ARRAY_N)
+    ) u_c_tile_buffer (
+        .clk       (clk),
+        .rst       (rst),
+        .clear     (clear_acc),
+        .write_en  (c_tile_write_en),
+        .write_addr(c_tile_write_addr),
+        .write_data(c_tile_write_data),
+        .data_flat (c_tile_flat)
+    );
+
     systolic_array #(
         .ARRAY_M            (ARRAY_M),
         .ARRAY_N            (ARRAY_N),
@@ -254,41 +312,7 @@ module gemm_top #(
             a_k_d            <= '0;
             b_k_d            <= '0;
             b_col_d          <= '0;
-
-            for (row = 0; row < ARRAY_M; row++) begin
-                for (kval = 0; kval < TILE_K; kval++) begin
-                    a_tile_buf[row][kval] <= '0;
-                end
-            end
-
-            for (kval = 0; kval < TILE_K; kval++) begin
-                for (col = 0; col < ARRAY_N; col++) begin
-                    b_tile_buf[kval][col] <= '0;
-                end
-            end
         end else begin
-            if (load_buf_clear) begin
-                for (row = 0; row < ARRAY_M; row++) begin
-                    for (kval = 0; kval < TILE_K; kval++) begin
-                        a_tile_buf[row][kval] <= '0;
-                    end
-                end
-
-                for (kval = 0; kval < TILE_K; kval++) begin
-                    for (col = 0; col < ARRAY_N; col++) begin
-                        b_tile_buf[kval][col] <= '0;
-                    end
-                end
-            end
-
-            if (a_commit_valid_d) begin
-                a_tile_buf[a_row_d][a_k_d] <= $signed(accel_a_rdata);
-            end
-
-            if (b_commit_valid_d) begin
-                b_tile_buf[b_k_d][b_col_d] <= $signed(accel_b_rdata);
-            end
-
             a_commit_valid_d <= a_issue_valid;
             b_commit_valid_d <= b_issue_valid;
             a_row_d          <= a_issue_row;
@@ -296,6 +320,11 @@ module gemm_top #(
             b_k_d            <= b_issue_k;
             b_col_d          <= b_issue_col;
         end
+    end
+
+    always_comb begin
+        a_tile_write_addr = (a_row_d * TILE_K) + a_k_d;
+        b_tile_write_addr = (b_k_d * ARRAY_N) + b_col_d;
     end
 
     always_comb begin
@@ -309,11 +338,11 @@ module gemm_top #(
 
         if (compute_phase) begin
             for (row = 0; row < ARRAY_M; row++) begin
-                act_stream[row] = a_tile_buf[row][compute_k_idx];
+                act_stream[row] = $signed(a_tile_flat[(((row * TILE_K) + compute_k_idx) * DATA_W) +: DATA_W]);
             end
 
             for (col = 0; col < ARRAY_N; col++) begin
-                wgt_stream[col] = b_tile_buf[compute_k_idx][col];
+                wgt_stream[col] = $signed(b_tile_flat[(((compute_k_idx * ARRAY_N) + col) * DATA_W) +: DATA_W]);
             end
         end
     end
@@ -335,6 +364,21 @@ module gemm_top #(
     end
 
     always_comb begin
+        c_tile_write_en   = 1'b0;
+        c_tile_write_addr = capture_index;
+        c_tile_write_data = '0;
+        capture_row_idx   = capture_index / ARRAY_N;
+        capture_col_idx   = capture_index % ARRAY_N;
+
+        if (capture_phase &&
+            (capture_row_idx < active_rows) &&
+            (capture_col_idx < active_cols)) begin
+            c_tile_write_en   = 1'b1;
+            c_tile_write_data = result_matrix[capture_row_idx][capture_col_idx];
+        end
+    end
+
+    always_comb begin
         accel_c_en    = 1'b0;
         accel_c_we    = 1'b0;
         accel_c_addr  = '0;
@@ -348,7 +392,7 @@ module gemm_top #(
             accel_c_en    = 1'b1;
             accel_c_we    = 1'b1;
             accel_c_addr  = ((tile_row_base + store_row_idx) * cfg_n) + (tile_col_base + store_col_idx);
-            accel_c_wdata = result_matrix[store_row_idx][store_col_idx];
+            accel_c_wdata = c_tile_flat[(store_index * ACC_W) +: ACC_W];
         end
     end
 

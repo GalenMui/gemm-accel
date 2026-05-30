@@ -1,0 +1,5 @@
+name=random_positive_8x8x8
+m=8
+n=8
+k=8
+mac_ops=512

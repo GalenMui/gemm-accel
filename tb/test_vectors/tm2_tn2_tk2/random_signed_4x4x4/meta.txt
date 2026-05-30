@@ -1,0 +1,5 @@
+name=random_signed_4x4x4
+m=4
+n=4
+k=4
+mac_ops=64

@@ -1,0 +1,83 @@
+`timescale 1ns / 1ps
+
+module gemm_accel #(
+    parameter int TILE_M = 2,
+    parameter int TILE_N = 2,
+    parameter int TILE_K = 2,
+    parameter int DATA_WIDTH = 8,
+    parameter int ACC_WIDTH = 32,
+    parameter int DIM_WIDTH = 16,
+    parameter int A_DEPTH = 4096,
+    parameter int B_DEPTH = 4096,
+    parameter int C_DEPTH = 4096,
+    parameter int A_ADDR_WIDTH = $clog2(A_DEPTH),
+    parameter int B_ADDR_WIDTH = $clog2(B_DEPTH),
+    parameter int C_ADDR_WIDTH = $clog2(C_DEPTH),
+    parameter bit ENABLE_ZERO_GATING = 1'b1
+) (
+    input  logic                                clk,
+    input  logic                                rst,
+    input  logic                                start,
+    input  logic [DIM_WIDTH-1:0]                cfg_m,
+    input  logic [DIM_WIDTH-1:0]                cfg_n,
+    input  logic [DIM_WIDTH-1:0]                cfg_k,
+    output logic                                busy,
+    output logic                                done,
+    input  logic                                host_a_en,
+    input  logic                                host_a_we,
+    input  logic [A_ADDR_WIDTH-1:0]             host_a_addr,
+    input  logic [DATA_WIDTH-1:0]               host_a_wdata,
+    output logic [DATA_WIDTH-1:0]               host_a_rdata,
+    input  logic                                host_b_en,
+    input  logic                                host_b_we,
+    input  logic [B_ADDR_WIDTH-1:0]             host_b_addr,
+    input  logic [DATA_WIDTH-1:0]               host_b_wdata,
+    output logic [DATA_WIDTH-1:0]               host_b_rdata,
+    input  logic                                host_c_en,
+    input  logic                                host_c_we,
+    input  logic [C_ADDR_WIDTH-1:0]             host_c_addr,
+    input  logic [ACC_WIDTH-1:0]                host_c_wdata,
+    output logic [ACC_WIDTH-1:0]                host_c_rdata
+);
+
+    gemm_top #(
+        .ARRAY_M           (TILE_M),
+        .ARRAY_N           (TILE_N),
+        .TILE_K            (TILE_K),
+        .DATA_W            (DATA_WIDTH),
+        .ACC_W             (ACC_WIDTH),
+        .DIM_W             (DIM_WIDTH),
+        .A_DEPTH           (A_DEPTH),
+        .B_DEPTH           (B_DEPTH),
+        .C_DEPTH           (C_DEPTH),
+        .A_ADDR_W          (A_ADDR_WIDTH),
+        .B_ADDR_W          (B_ADDR_WIDTH),
+        .C_ADDR_W          (C_ADDR_WIDTH),
+        .ENABLE_ZERO_GATING(ENABLE_ZERO_GATING)
+    ) u_tiled_gemm_core (
+        .clk         (clk),
+        .rst         (rst),
+        .start       (start),
+        .cfg_m       (cfg_m),
+        .cfg_n       (cfg_n),
+        .cfg_k       (cfg_k),
+        .busy        (busy),
+        .done        (done),
+        .host_a_en   (host_a_en),
+        .host_a_we   (host_a_we),
+        .host_a_addr (host_a_addr),
+        .host_a_wdata(host_a_wdata),
+        .host_a_rdata(host_a_rdata),
+        .host_b_en   (host_b_en),
+        .host_b_we   (host_b_we),
+        .host_b_addr (host_b_addr),
+        .host_b_wdata(host_b_wdata),
+        .host_b_rdata(host_b_rdata),
+        .host_c_en   (host_c_en),
+        .host_c_we   (host_c_we),
+        .host_c_addr (host_c_addr),
+        .host_c_wdata(host_c_wdata),
+        .host_c_rdata(host_c_rdata)
+    );
+
+endmodule

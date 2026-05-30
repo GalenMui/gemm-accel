@@ -1,5 +1,5 @@
 set default_part "xc7a200tfbg484-1"
-set default_top  "gemm_top"
+set default_top  "gemm_accel"
 set default_clk_period_ns 5.000
 
 if {[llength $argv] >= 1} {
@@ -27,10 +27,13 @@ file mkdir $out_dir
 
 read_verilog -sv [list \
     [file join $root_dir rtl scratchpad.sv] \
+    [file join $root_dir rtl tile_buffer.sv] \
+    [file join $root_dir rtl mac_unit.sv] \
     [file join $root_dir rtl pe.sv] \
     [file join $root_dir rtl systolic_array.sv] \
     [file join $root_dir rtl controller.sv] \
     [file join $root_dir rtl gemm_top.sv] \
+    [file join $root_dir rtl gemm_accel.sv] \
 ]
 
 create_clock -name core_clk -period $clk_period_ns [get_ports clk]

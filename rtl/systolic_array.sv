@@ -1,8 +1,8 @@
 `timescale 1ns / 1ps
 
 module systolic_array #(
-    parameter int ARRAY_M = 8,
-    parameter int ARRAY_N = 8,
+    parameter int ARRAY_M = 2,
+    parameter int ARRAY_N = 2,
     parameter int DATA_W = 8,
     parameter int ACC_W = 32,
     parameter bit ENABLE_ZERO_GATING = 1'b1

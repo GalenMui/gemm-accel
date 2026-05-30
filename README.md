@@ -1,189 +1,125 @@
-# INT8 GEMM Accelerator on FPGA
+# Tiled INT8 GEMM Accelerator
 
-This project implements a synthesizable SystemVerilog INT8 GEMM accelerator
-organized like a small FPGA RTL repository. The default configuration is an
-8x8 output-stationary systolic array that performs `INT8 x INT8 -> INT32`
-matrix multiplication with tiled execution, BRAM-backed scratchpads, and a
-simple sparsity-aware MAC gating scheme.
+This repository implements a small but realistic SystemVerilog GEMM accelerator
+for signed integer matrix multiplication:
 
-## Project goal
+```text
+C = A x B
+```
 
-The design is meant to look like a realistic FPGA hardware project rather than
-a toy matrix-multiply example. The emphasis is on:
+The default working target is signed INT8 input data with signed INT32
+accumulation. The primary top level is `rtl/gemm_accel.sv`, which exposes a
+simple host scratchpad interface plus `start`, `busy`, and `done` control.
 
-- parameterized RTL that scales beyond the default 8x8 array
-- Vivado-friendly coding style for DSP and BRAM inference
-- explicit controller-driven `load / compute / store` execution
-- readable verification and synthesis collateral
+## Current Architecture
 
-## Repository structure
+- `TILE_M x TILE_N` output-stationary systolic array
+- `TILE_K` reduction blocking
+- local A tile buffer, B tile buffer, and C output tile buffer
+- BRAM-style A, B, and C scratchpads
+- controller FSM with `CLEAR`, `LOAD`, `COMPUTE`, `DRAIN`, `CAPTURE`, `STORE`
+- signed MAC datapath with optional zero gating
+- edge-tile support by zero-padding inactive tile lanes
+
+The first target configuration is:
+
+```text
+DATA_WIDTH = 8
+ACC_WIDTH  = 32
+M,N,K      = runtime configured
+TILE_M     = 2
+TILE_N     = 2
+TILE_K     = 2
+```
+
+The regression also compiles and runs a `4x4x4` tile configuration.
+
+## Repository Layout
 
 ```text
 rtl/
-  pe.sv
-  systolic_array.sv
-  scratchpad.sv
-  controller.sv
-  gemm_top.sv
+  gemm_accel.sv       top-level accelerator wrapper
+  gemm_top.sv         tiled core integration
+  controller.sv       tile-loop FSM
+  tile_buffer.sv      reusable local tile buffer
+  scratchpad.sv       true dual-port local memory
+  systolic_array.sv   output-stationary PE mesh
+  pe.sv               processing element
+  mac_unit.sv         signed integer MAC helper
 tb/
-  gemm_top_tb.sv
-sim/
-  filelist.f
+  gemm_accel_tb.sv    generated-vector SystemVerilog testbench
+  test_vectors/       generated input and expected-output vectors
+models/
+  gemm_golden.py      Python signed GEMM golden model
+  gen_tests.py        deterministic randomized vector generator
 scripts/
-  run_iverilog.sh
-  vivado_synth.tcl
+  run_iverilog.sh     default single-config simulation
+  run_tests.py        vector generation, tile sweep, report collection
+  vivado_synth.tcl    optional non-project Vivado synthesis flow
 docs/
   architecture.md
-README.md
+  verification.md
+  performance.md
+reports/
+  simulation_results/
+  performance_results/
 ```
 
-## Architecture overview
+## Run Simulation
 
-### Processing array
-
-- `pe.sv` implements one output-stationary processing element.
-- Each PE receives one activation and one weight, forwards them to its
-  neighbors, and accumulates the product into a local INT32 register.
-- The multiply-accumulate expression is written in a DSP-friendly style for
-  Xilinx synthesis.
-
-### Systolic dataflow
-
-- `systolic_array.sv` instantiates a parameterized `ARRAY_M x ARRAY_N` grid.
-- Input skewing is handled inside the array. Row `i` activations are delayed by
-  `i` cycles and column `j` weights are delayed by `j` cycles before entering
-  the mesh.
-- This keeps the top-level streaming interface simple: one `k` slice of `A`
-  rows and `B` columns is presented per cycle, while the array itself aligns
-  the wavefront.
-
-### Scratchpads
-
-- `scratchpad.sv` is a generic true dual-port RAM.
-- `gemm_top.sv` instantiates separate A, B, and C scratchpads.
-- One port is host-facing for preloading matrices and reading back results.
-- The second port is accelerator-facing so the controller can read A/B tiles
-  and store C results without sharing the host port.
-- The memory declaration uses `(* ram_style = "block" *)` so Vivado is more
-  likely to infer BRAM instead of distributing large memories into registers.
-
-### Tile buffers
-
-- The controller does not try to read many values per cycle directly from BRAM.
-- Instead, it stages one tile of A and one tile of B into small local buffers
-  inside `gemm_top.sv`.
-- This is a practical FPGA tradeoff: BRAM provides capacity, while the tile
-  buffers provide the per-cycle bandwidth needed to feed the systolic array.
-
-### Tiling strategy
-
-- The output tile size is `ARRAY_M x ARRAY_N`.
-- The inner reduction dimension is processed in chunks of `TILE_K`.
-- For each output tile `(m_tile, n_tile)`, the controller loops over all
-  `k_tile` chunks, accumulating partial sums in the PE array.
-- After the final `k_tile`, the completed output tile is written to the C
-  scratchpad.
-- Partial edge tiles are handled by zero-padding inactive rows, columns, or
-  `k` lanes in the local tile buffers.
-
-### Control flow
-
-`controller.sv` sequences:
-
-1. `CLEAR`: reset the PE accumulators for a new output tile
-2. `LOAD`: fetch the next A/B tile chunk from scratchpads
-3. `COMPUTE`: stream one `k` slice per cycle into the array
-4. `DRAIN`: allow the systolic wavefront to finish propagating
-5. `STORE`: write the completed output tile to the output scratchpad
-
-This produces a realistic accelerator control path for repeated tile
-processing across larger matrices.
-
-### Sparsity-aware gating
-
-- Each PE checks whether the incoming activation or weight is zero.
-- If either operand is zero, the accumulator update is skipped for that cycle.
-- The zero values still propagate through the array, so the dataflow timing
-  remains systolic and synthesizable.
-
-This is intentionally simple, but it is a believable first-step sparsity
-optimization for an FPGA accelerator.
-
-## Module summary
-
-- `rtl/pe.sv`: INT8 MAC PE with operand forwarding and zero gating
-- `rtl/systolic_array.sv`: parameterized systolic mesh with input skew logic
-- `rtl/scratchpad.sv`: BRAM-friendly true dual-port local memory
-- `rtl/controller.sv`: tile-loop FSM for load/compute/drain/store sequencing
-- `rtl/gemm_top.sv`: top-level integration of scratchpads, tile buffers,
-  controller, and compute array
-- `tb/gemm_top_tb.sv`: deterministic top-level verification
-
-## Simulation
-
-The supplied testbench runs:
-
-- a small 4x4x4 case with embedded zeros to exercise sparse gating
-- a larger 10x9x12 case that crosses tile boundaries in `M`, `N`, and `K`
-
-Run the simulation with:
+Default 2x2x2 tile simulation:
 
 ```bash
 ./scripts/run_iverilog.sh
 ```
 
-The script compiles the RTL and testbench with `iverilog -g2012` and executes
-the simulation with `vvp`.
-
-## Vivado synthesis
-
-The repository includes a simple non-project synthesis TCL flow:
+Full regression with generated vectors, 2x2x2 and 4x4x4 tile builds, logs, and
+performance summaries:
 
 ```bash
-vivado -mode batch -source scripts/vivado_synth.tcl -tclargs xc7a200tfbg484-1 gemm_top 5.0
+python3 scripts/run_tests.py
 ```
 
-Arguments:
+The full run writes:
 
-- FPGA part: defaults to `xc7a200tfbg484-1`
-- top module: defaults to `gemm_top`
-- clock period in ns: defaults to `5.0`
+- `reports/simulation_results/*.txt`
+- `reports/performance_results/performance_summary.csv`
+- `reports/performance_results/performance_summary.md`
 
-The script emits:
+## Example Results
 
-- `vivado_out/post_synth_utilization.rpt`
-- `vivado_out/post_synth_utilization_hier.rpt`
-- `vivado_out/post_synth_timing.rpt`
-- `vivado_out/post_synth_power.rpt`
-- `vivado_out/post_synth.dcp`
+Measured with `python3 scripts/run_tests.py`:
 
-## What to inspect in Vivado
+| Case | Shape | Tile | Cycles | MAC Ops | MACs/Cycle | Peak | Utilization |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| random_signed_4x4x4 | 4x4x4 | 2x2x2 | 109 | 64 | 0.587 | 4 | 14.68% |
+| edge_tiles_5x5x5 | 5x5x5 | 2x2x2 | 325 | 125 | 0.385 | 4 | 9.62% |
+| random_signed_8x8x8 | 8x8x8 | 4x4x4 | 349 | 512 | 1.467 | 16 | 9.17% |
+| edge_tiles_9x9x9 | 9x9x9 | 4x4x4 | 1027 | 729 | 0.710 | 16 | 4.44% |
 
-When reviewing synthesis results, pay attention to:
+Utilization is low for these small matrices because the current design uses a
+simple one-element-per-cycle scratchpad load path and explicit capture/store
+phases. That is intentional for a clean first RTL target.
 
-- DSP utilization: confirm multiplies are mapping into DSP resources rather
-  than LUT-heavy soft multipliers
-- BRAM utilization: confirm the scratchpads infer block RAMs
-- hierarchical utilization: check where BRAM and DSP resources land
-- inferred memory style: verify the scratchpad arrays are not implemented as
-  distributed registers
-- timing summary and slack: especially on the PE MAC path, controller address
-  generation, and the array interconnect
+## Vivado Synthesis
 
-## FPGA-oriented design decisions
+The repo includes a simple non-project synthesis script:
 
-- Output-stationary accumulation keeps partial sums local inside PEs, which is
-  a natural fit for systolic GEMM hardware.
-- Dual-port scratchpads separate host access from accelerator access.
-- Small tile buffers avoid unrealistic multi-port BRAM assumptions.
-- Zero gating is implemented in the PE datapath, not as a fragile external
-  shortcut that would break the systolic schedule.
+```bash
+vivado -mode batch -source scripts/vivado_synth.tcl -tclargs xc7a200tfbg484-1 gemm_accel 5.0
+```
 
-## Future extensions
+This flow is provided as collateral, not as a claimed FPGA result. Resource,
+timing, and power numbers should only be reported after running Vivado locally.
 
-- scale the array beyond 8x8 and tune `TILE_K` independently
-- add double-buffered tile buffers to overlap load and compute
-- wrap the scratchpads and control plane in AXI-Lite / AXI-Stream interfaces
-- add quantization, dequantization, or bias support around GEMM
-- improve sparsity handling with compressed metadata or row/column skipping
-- add performance counters for tile latency, utilization, and zero-skip events
+## Current Limitations
+
+- no AXI, DMA, or cache-coherent host interface yet
+- no floating point
+- no double-buffering or load/compute overlap
+- no synthesis/resource claims checked into the repo
+- accumulator overflow follows fixed-width two's-complement RTL behavior
+
+Good next extensions would be double-buffered tile loads, richer counters,
+AXI-Lite control, AXI-Stream or DMA data movement, and synthesis-driven area
+and timing exploration.

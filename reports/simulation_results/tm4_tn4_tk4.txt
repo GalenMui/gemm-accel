@@ -1,0 +1,22 @@
+RUN case=zeros_4x4x4 M=4 N=4 K=4 TILE=4x4x4
+PASS case=zeros_4x4x4
+PERF case=zeros_4x4x4 M=4 N=4 K=4 TILE_M=4 TILE_N=4 TILE_K=4 cycles=61 mac_ops=64 macs_per_cycle=1.049 peak_macs_per_cycle=16 utilization_pct=6.56
+RUN case=identity_4x4x4 M=4 N=4 K=4 TILE=4x4x4
+PASS case=identity_4x4x4
+PERF case=identity_4x4x4 M=4 N=4 K=4 TILE_M=4 TILE_N=4 TILE_K=4 cycles=61 mac_ops=64 macs_per_cycle=1.049 peak_macs_per_cycle=16 utilization_pct=6.56
+RUN case=hand_small_4x4x4 M=4 N=4 K=4 TILE=4x4x4
+PASS case=hand_small_4x4x4
+PERF case=hand_small_4x4x4 M=4 N=4 K=4 TILE_M=4 TILE_N=4 TILE_K=4 cycles=61 mac_ops=64 macs_per_cycle=1.049 peak_macs_per_cycle=16 utilization_pct=6.56
+RUN case=random_positive_8x8x8 M=8 N=8 K=8 TILE=4x4x4
+PASS case=random_positive_8x8x8
+PERF case=random_positive_8x8x8 M=8 N=8 K=8 TILE_M=4 TILE_N=4 TILE_K=4 cycles=349 mac_ops=512 macs_per_cycle=1.467 peak_macs_per_cycle=16 utilization_pct=9.17
+RUN case=random_signed_8x8x8 M=8 N=8 K=8 TILE=4x4x4
+PASS case=random_signed_8x8x8
+PERF case=random_signed_8x8x8 M=8 N=8 K=8 TILE_M=4 TILE_N=4 TILE_K=4 cycles=349 mac_ops=512 macs_per_cycle=1.467 peak_macs_per_cycle=16 utilization_pct=9.17
+RUN case=int8_extremes_4x4x4 M=4 N=4 K=4 TILE=4x4x4
+PASS case=int8_extremes_4x4x4
+PERF case=int8_extremes_4x4x4 M=4 N=4 K=4 TILE_M=4 TILE_N=4 TILE_K=4 cycles=61 mac_ops=64 macs_per_cycle=1.049 peak_macs_per_cycle=16 utilization_pct=6.56
+RUN case=edge_tiles_9x9x9 M=9 N=9 K=9 TILE=4x4x4
+PASS case=edge_tiles_9x9x9
+PERF case=edge_tiles_9x9x9 M=9 N=9 K=9 TILE_M=4 TILE_N=4 TILE_K=4 cycles=1027 mac_ops=729 macs_per_cycle=0.710 peak_macs_per_cycle=16 utilization_pct=4.44
+All 7 GEMM accelerator tests passed.

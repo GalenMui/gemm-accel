@@ -1,10 +1,17 @@
 `timescale 1ns / 1ps
 
 module controller #(
-    parameter int ARRAY_M = 8,
-    parameter int ARRAY_N = 8,
-    parameter int TILE_K = 8,
-    parameter int DIM_W = 16
+    parameter int ARRAY_M = 2,
+    parameter int ARRAY_N = 2,
+    parameter int TILE_K = 2,
+    parameter int DIM_W = 16,
+    parameter int LOAD_A_COUNT = ARRAY_M * TILE_K,
+    parameter int LOAD_B_COUNT = TILE_K * ARRAY_N,
+    parameter int LOAD_CYCLES = (LOAD_A_COUNT > LOAD_B_COUNT) ? LOAD_A_COUNT : LOAD_B_COUNT,
+    parameter int LOAD_W = (LOAD_CYCLES > 0) ? $clog2(LOAD_CYCLES + 1) : 1,
+    parameter int COMPUTE_W = (TILE_K > 1) ? $clog2(TILE_K) : 1,
+    parameter int STORE_COUNT = ARRAY_M * ARRAY_N,
+    parameter int STORE_W = (STORE_COUNT > 1) ? $clog2(STORE_COUNT) : 1
 ) (
     input  logic                         clk,
     input  logic                         rst,
@@ -18,11 +25,13 @@ module controller #(
     output logic                         load_phase,
     output logic                         load_buf_clear,
     output logic                         load_issue,
-    output logic [$clog2(((ARRAY_M*TILE_K) > (TILE_K*ARRAY_N) ? (ARRAY_M*TILE_K) : (TILE_K*ARRAY_N)) + 1)-1:0] load_index,
+    output logic [LOAD_W-1:0]             load_index,
     output logic                         compute_phase,
-    output logic [$clog2(TILE_K)-1:0]    compute_k_idx,
+    output logic [COMPUTE_W-1:0]          compute_k_idx,
+    output logic                         capture_phase,
+    output logic [STORE_W-1:0]            capture_index,
     output logic                         store_phase,
-    output logic [$clog2(ARRAY_M*ARRAY_N)-1:0] store_index,
+    output logic [STORE_W-1:0]            store_index,
     output logic [DIM_W-1:0]             tile_row_base,
     output logic [DIM_W-1:0]             tile_col_base,
     output logic [DIM_W-1:0]             k_base,
@@ -31,14 +40,8 @@ module controller #(
     output logic [DIM_W-1:0]             active_k
 );
 
-    localparam int LOAD_A_COUNT = ARRAY_M * TILE_K;
-    localparam int LOAD_B_COUNT = TILE_K * ARRAY_N;
-    localparam int LOAD_CYCLES  = (LOAD_A_COUNT > LOAD_B_COUNT) ? LOAD_A_COUNT : LOAD_B_COUNT;
     localparam int DRAIN_CYCLES = ARRAY_M + ARRAY_N - 2;
-    localparam int LOAD_W       = $clog2(LOAD_CYCLES + 1);
-    localparam int COMPUTE_W    = (TILE_K > 1) ? $clog2(TILE_K) : 1;
     localparam int DRAIN_W      = (DRAIN_CYCLES > 0) ? $clog2(DRAIN_CYCLES + 1) : 1;
-    localparam int STORE_W      = $clog2(ARRAY_M * ARRAY_N);
 
     typedef enum logic [2:0] {
         ST_IDLE,
@@ -46,6 +49,7 @@ module controller #(
         ST_LOAD,
         ST_COMPUTE,
         ST_DRAIN,
+        ST_CAPTURE,
         ST_STORE,
         ST_DONE
     } state_t;
@@ -55,6 +59,7 @@ module controller #(
     logic [LOAD_W-1:0]    load_count;
     logic [COMPUTE_W-1:0] compute_count;
     logic [DRAIN_W-1:0]   drain_count;
+    logic [STORE_W-1:0]   capture_count;
     logic [STORE_W-1:0]   store_count;
 
     logic [DIM_W-1:0] next_tile_row_base;
@@ -120,6 +125,8 @@ module controller #(
     assign load_index     = load_count;
     assign compute_phase  = (state == ST_COMPUTE);
     assign compute_k_idx  = compute_count;
+    assign capture_phase  = (state == ST_CAPTURE);
+    assign capture_index  = capture_count;
     assign store_phase    = (state == ST_STORE);
     assign store_index    = store_count;
 
@@ -132,6 +139,7 @@ module controller #(
             load_count    <= '0;
             compute_count <= '0;
             drain_count   <= '0;
+            capture_count <= '0;
             store_count   <= '0;
         end else begin
             case (state)
@@ -139,6 +147,7 @@ module controller #(
                     load_count    <= '0;
                     compute_count <= '0;
                     drain_count   <= '0;
+                    capture_count <= '0;
                     store_count   <= '0;
                     if (start && cfg_nonzero) begin
                         tile_row_base <= '0;
@@ -172,8 +181,8 @@ module controller #(
                                 load_count <= '0;
                                 state      <= ST_LOAD;
                             end else begin
-                                store_count <= '0;
-                                state       <= ST_STORE;
+                                capture_count <= '0;
+                                state         <= ST_CAPTURE;
                             end
                         end else begin
                             drain_count <= '0;
@@ -192,16 +201,26 @@ module controller #(
                             load_count <= '0;
                             state      <= ST_LOAD;
                         end else begin
-                            store_count <= '0;
-                            state       <= ST_STORE;
+                            capture_count <= '0;
+                            state         <= ST_CAPTURE;
                         end
                     end else begin
                         drain_count <= drain_count + 1'b1;
                     end
                 end
 
+                ST_CAPTURE: begin
+                    if (capture_count == (STORE_COUNT - 1)) begin
+                        capture_count <= '0;
+                        store_count   <= '0;
+                        state         <= ST_STORE;
+                    end else begin
+                        capture_count <= capture_count + 1'b1;
+                    end
+                end
+
                 ST_STORE: begin
-                    if (store_count == (ARRAY_M * ARRAY_N - 1)) begin
+                    if (store_count == (STORE_COUNT - 1)) begin
                         store_count <= '0;
                         if (more_n_tiles || more_m_tiles) begin
                             tile_row_base <= next_tile_row_base;

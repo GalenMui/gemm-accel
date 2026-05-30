@@ -1,6 +1,9 @@
 rtl/scratchpad.sv
+rtl/tile_buffer.sv
+rtl/mac_unit.sv
 rtl/pe.sv
 rtl/systolic_array.sv
 rtl/controller.sv
 rtl/gemm_top.sv
-tb/gemm_top_tb.sv
+rtl/gemm_accel.sv
+tb/gemm_accel_tb.sv
